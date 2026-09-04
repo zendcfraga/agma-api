@@ -24,7 +24,8 @@ class Header extends CI_Model
             'http://localhost:8100', // SECURITY UPDATE: Local Ionic development server for agma-mobile-app.
             'http://127.0.0.1:8100', // SECURITY UPDATE: Same Ionic server when opened through 127.0.0.1.
             'https://localhost', // SECURITY UPDATE: Capacitor Android uses this secure local WebView origin.
-            'capacitor://localhost' // SECURITY UPDATE: Keep compatibility if the Capacitor origin changes by platform.
+            'capacitor://localhost', // SECURITY UPDATE: Keep compatibility if the Capacitor origin changes by platform.
+            'https://agmaregistrationv1.aselcoinc.net' // SECURITY UPDATE: Production agma-web-app origin.
             // 'https://YOUR-AGMA-WEB-DOMAIN' // Add the exact HTTPS origin here before production deployment.
         );
 
