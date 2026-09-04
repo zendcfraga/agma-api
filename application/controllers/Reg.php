@@ -13,6 +13,7 @@ class Reg extends CI_Controller{
 
         $this->load->model('Header'); //load is a property, to call Header class from model
         $this->Header->ApiHeader(); //to call ApiHeader function from Header
+        $this->load->library('Api_auth'); // SECURITY UPDATE: Mobile registration/report calls use user-specific Bearer tokens.
         
         // Load helper for global variables
         $this->load->helper('global_vars');
@@ -35,8 +36,8 @@ class Reg extends CI_Controller{
         $data = json_decode(file_get_contents('php://input')); 
         if($data){
                 
-                $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+                // OLD CODE: TOKEN was read from the request body.
+            if ($this->api_auth->require_user(null, false)) { // SECURITY UPDATE: Require the logged-in mobile user.
                 
                 $now = $this->now;
                 $now= $now->format('Y-m-d h:i:s');
@@ -117,8 +118,8 @@ class Reg extends CI_Controller{
          $data = json_decode(file_get_contents('php://input')); 
         if($data){
                 
-                $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+                // OLD CODE: TOKEN was read from the request body.
+            if ($this->api_auth->require_user(null, false)) { // SECURITY UPDATE: Require the logged-in mobile user.
                 
                 $now = $this->now;
                 $now= $now->format('Y-m-d h:i:s');
@@ -279,6 +280,11 @@ class Reg extends CI_Controller{
     }
 
     public function attendance_registration_online(){
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') { // SECURITY UPDATE: Registration changes data, so only accept POST.
+            http_response_code(405);
+            echo json_encode(array('message' => 'Method not allowed', 'status' => 'error'));
+            return;
+        }
         
         // Use the global variables
         $now = $this->now;
@@ -287,9 +293,39 @@ class Reg extends CI_Controller{
         if ($now < $cutoff) {
             $data = json_decode(file_get_contents('php://input')); 
            if($data){
-                $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-                if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') 
-                {
+                // SECURITY UPDATE: Consent must be proven by a valid short-lived intent created on the consent page.
+                if (!isset($data->REGISTRATION_INTENT) || !is_string($data->REGISTRATION_INTENT) || trim($data->REGISTRATION_INTENT) === '') {
+                    http_response_code(403);
+                    echo json_encode(array(
+                        'message' => 'Please agree to the Data Privacy Statement before registering.',
+                        'status' => 'error'
+                    ));
+                    return;
+                }
+
+                $intent_hash = hash('sha256', trim($data->REGISTRATION_INTENT)); // Compare hashes; never store the usable token.
+                $intent = $this->db
+                    ->where('token_hash', $intent_hash)
+                    ->where('used_at IS NULL', NULL, FALSE)
+                    ->where('expires_at >=', $this->now->format('Y-m-d H:i:s'))
+                    ->limit(1)
+                    ->get('tbl_registration_intents');
+
+                if ($intent->num_rows() !== 1) { // Reject missing, expired, already-used, or made-up tokens.
+                    http_response_code(403);
+                    echo json_encode(array(
+                        'message' => 'Your consent permission is invalid or expired. Please start again.',
+                        'status' => 'error'
+                    ));
+                    return;
+                }
+
+                $intent_id = $intent->row()->id; // Keep the row ID so the exact intent can be consumed after validation.
+
+                // SECURITY UPDATE: The two old lines below are intentionally disabled because React cannot keep a secret.
+                // $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+                // if ($TOKEN == 'OLD_BROWSER_TOKEN_REMOVED')
+                // {
                         $now = $this->now;
                         $now= $now->format('Y-m-d h:i:s');
     
@@ -300,8 +336,10 @@ class Reg extends CI_Controller{
                         $AREA = filter_var($data->AREA, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                         $TOWN = filter_var($data->TOWN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                         $CONTACT_NO = filter_var($data->CONTACT_NO, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-                        $VENUE = filter_var($data->VENUE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-                        $REG_MODE = filter_var($data->REG_MODE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+                        // $VENUE = filter_var($data->VENUE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW); // OLD: Browser could change this value.
+                        // $REG_MODE = filter_var($data->REG_MODE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW); // OLD: Browser could change this value.
+                        $VENUE = 'online'; // SECURITY UPDATE: The API decides the trusted value for this online-only endpoint.
+                        $REG_MODE = 'online'; // SECURITY UPDATE: Do not trust a client-provided registration mode.
                         $COMMENTS = filter_var($data->COMMENTS, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                         $LASTNAME = filter_var($data->LASTNAME, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                         $FIRSTNAME = filter_var($data->FIRSTNAME, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
@@ -310,12 +348,11 @@ class Reg extends CI_Controller{
                         $PUROK = filter_var($data->PUROK, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                         $BRGY = filter_var($data->BRGY, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                         $BIRTHDATE = filter_var($data->BIRTHDATE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-                        $AGE = filter_var($data->AGE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+                        $AGE = filter_var($data->AGE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW); // Kept for compatibility; validate/calculated value can be added later.
                         $CIVIL_STATUS = filter_var($data->CIVIL_STATUS, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
     
                         $MEMBER_NO = $this->getMemberID($ACCOUNT_NO,$TOWN,$LASTNAME,$FIRSTNAME,$MIDDLE,$SPOUSE,$BRGY);
-    
-    
+        
                         $registration = array(
                             'db_member_unqid' => $MEMBER_UNQID,
                             'db_last' => $LASTNAME,
@@ -359,8 +396,54 @@ class Reg extends CI_Controller{
                                 $validate_duplicate_reg = $this->db->get('tbl_attendees');
     
                                 if($validate_duplicate_reg->num_rows() == 0 ){
-                                    $this->db->insert('tbl_attendees', $registration);
-                                    $response = array('message' => 'Registration Successful!', 'status' => 'success!');
+                                    // SECURITY UPDATE: Recheck the cutoff immediately before writing the registration.
+                                    $final_now = get_now();
+                                    if ($final_now >= $this->cutoff) {
+                                        http_response_code(403);
+                                        $response = array('message' => 'Registrations are now closed. ' . $this->cutoff_msg, 'status' => 'error');
+                                    }else{
+                                        // SECURITY UPDATE: Consume the intent and insert registration in one transaction.
+                                        // If either action fails, both are rolled back and the visitor can safely try again.
+                                        $this->db->trans_begin();
+
+                                        $receipt_expires_at = clone $final_now;
+                                        $receipt_expires_at->modify('+5 minutes'); // SECURITY UPDATE: Give the successful browser a short time to open confirmation.
+
+                                        $this->db
+                                            ->where('id', $intent_id)
+                                            ->where('used_at IS NULL', NULL, FALSE)
+                                            ->where('expires_at >=', $final_now->format('Y-m-d H:i:s'))
+                                            ->update('tbl_registration_intents', array(
+                                                'used_at' => $final_now->format('Y-m-d H:i:s'),
+                                                'expires_at' => $receipt_expires_at->format('Y-m-d H:i:s'),
+                                                'confirmation_viewed_at' => NULL
+                                            ));
+
+                                        if ($this->db->affected_rows() !== 1) { // Another request already used this same intent.
+                                            $this->db->trans_rollback();
+                                            http_response_code(403);
+                                            $response = array(
+                                                'message' => 'This consent permission was already used or has expired.',
+                                                'status' => 'error'
+                                            );
+                                        }else{
+                                            $inserted = $this->db->insert('tbl_attendees', $registration);
+
+                                            if (!$inserted || $this->db->trans_status() === FALSE) {
+                                                $this->db->trans_rollback();
+                                                http_response_code(500);
+                                                $response = array('message' => 'Registration could not be saved. Please try again.', 'status' => 'error');
+                                            }else{
+                                                $this->db->trans_commit();
+                                                // SECURITY UPDATE: Return the original intent as a receipt only after a successful commit.
+                                                $response = array(
+                                                    'message' => 'Registration Successful!',
+                                                    'status' => 'success!',
+                                                    'registration_receipt' => $data->REGISTRATION_INTENT
+                                                );
+                                            }
+                                        }
+                                    }
                                 }else{
                                     $response = array('message' => 'Already registered.', 'status' => 'error!');
                                 }
@@ -374,14 +457,16 @@ class Reg extends CI_Controller{
                     
                     
                     
-                }else{ //TOKEN closing
-                    $response =  array('message' => 'You are not authorized. Please contact the Administrator.', 'status' => 'error');
-                }
+                // }else{ // OLD TOKEN closing
+                //     $response = array('message' => 'You are not authorized. Please contact the Administrator.', 'status' => 'error');
+                // }
                 
            }else{
+               http_response_code(400); // SECURITY UPDATE: Invalid JSON is a bad request, not an authentication error.
                $response = array('message' => 'Invalid Parameters');
            }
         }else {
+            http_response_code(403); // SECURITY UPDATE: Closure is enforced by the API, not only hidden in React.
             $response = array('message' => 'Registrations are now closed. ' . $this->cutoff_msg, 'status' => 'error');
         }
         
@@ -391,8 +476,8 @@ class Reg extends CI_Controller{
     public function attendance_registration_manual(){
         $data = json_decode(file_get_contents('php://input')); 
        if($data){
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') 
+            // OLD CODE: TOKEN was read from the request body.
+            if ($this->api_auth->require_user(null, false)) // SECURITY UPDATE: Require the logged-in mobile user.
             {
                     
                     $MEMBER_UNQID = filter_var($data->UNQ_ID, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
@@ -487,9 +572,8 @@ class Reg extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            // OLD CODE: Attendance overview required a login token.
+            // SECURITY UPDATE: This endpoint contains guest-safe aggregate counts only.
                 $response = array();
                 
                 // Performing the query to get the count of attendees per venue
@@ -510,7 +594,6 @@ class Reg extends CI_Controller{
                     );
                 }
                 $response = $info;
-            }
         } else {
             $response = array('message' => 'Invalid Parameters');
         }
@@ -521,21 +604,22 @@ class Reg extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: Attendance Per User required a login token.
             $VENUE = filter_var($data->VENUE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            // SECURITY UPDATE: This guest report is public, but its venue input is still bound safely below.
                 $response = array();
                 
                 // Performing the query to get the count of attendees per venue
                 $query = "SELECT A.username as username,U.fullname as fullname, count(A.username) as cnt ";
                 $query .= "FROM `tbl_attendees` A  ";
                 $query .= "JOIN tbl_users U ON U.username = A.username ";
-                $query .= "WHERE db_venue = '". $VENUE ."' AND A.active = 1  ";
+                // OLD CODE: $query .= "WHERE db_venue = '". $VENUE ."' AND A.active = 1  ";
+                $query .= "WHERE db_venue = ? AND A.active = 1  "; // SECURITY UPDATE: Never join public input into SQL.
                 $query .= "GROUP BY A.username";
                 
                 // Executing the query
-                $result = $this->db->query($query);
+                $result = $this->db->query($query, array($VENUE)); // SECURITY UPDATE: Bind the public venue value safely.
                 
                 //initialize the $info para dili mag-error if $result is empty or walay sulod na data
                 $info = array();
@@ -550,7 +634,6 @@ class Reg extends CI_Controller{
                     );
                 }
                 $response = $info;
-            }
         } else {
             $response = array('message' => 'Invalid Parameters');
         }
@@ -561,9 +644,8 @@ class Reg extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            // OLD CODE: Attendance overview required a login token.
+            // SECURITY UPDATE: This endpoint contains guest-safe aggregate counts only.
                 $response = array();
                 
                 // Performing the query to get the count of attendees per venue
@@ -584,7 +666,6 @@ class Reg extends CI_Controller{
                     );
                 }
                 $response = $info;
-            }
         } else {
             $response = array('message' => 'Invalid Parameters');
         }
@@ -595,9 +676,8 @@ class Reg extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            // OLD CODE: Attendance overview required a login token.
+            // SECURITY UPDATE: This endpoint contains a guest-safe aggregate count only.
                 $response = array();
                 
                 // Performing the query to get the count of attendees per venue
@@ -614,7 +694,6 @@ class Reg extends CI_Controller{
                     );
                 }
                 $response = $info;
-            }
         } else {
             $response = array('message' => 'Invalid Parameters');
         }
@@ -625,9 +704,8 @@ class Reg extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            // OLD CODE: Attendance overview required a login token.
+            // SECURITY UPDATE: This endpoint contains a guest-safe aggregate count only.
                 $response = array();
                 
                 // Performing the query to get the count of attendees per venue
@@ -644,7 +722,6 @@ class Reg extends CI_Controller{
                     );
                 }
                 $response = $info;
-            }
         } else {
             $response = array('message' => 'Invalid Parameters');
         }

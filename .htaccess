@@ -1,10 +1,5 @@
 <IfModule mod_env.c>
     # SECURITY UPDATE: API responses must not expose PHP warnings or local file paths.
     SetEnv CI_ENV production
-</IfModule>
-<IfModule authz_core_module>
-    Require all denied
-</IfModule>
-<IfModule !authz_core_module>
-    Deny from all
+    SetEnv AGMA_AUTH_SECRET "y4hagC+XAZUfPEWqw6NrhmMa0wcvfbcce29MCwpd/fvL3FJV+eaCMt+Te2Ig/lNY"
 </IfModule>

@@ -10,6 +10,7 @@ class Userauth extends CI_Controller{
 
         $this->load->model('Header'); //load is a property, to call Header class from model
         $this->Header->ApiHeader(); //to call ApiHeader function from Header
+        $this->load->library('Api_auth'); // SECURITY UPDATE: Validate user-specific mobile access tokens in one place.
     }
 
     public function index(){
@@ -21,11 +22,12 @@ class Userauth extends CI_Controller{
         $data = json_decode(file_get_contents('php://input'));
 
         if($data){
-            $TOKEN     = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: Login required a shared TOKEN that could be extracted from the Android APK.
+            // $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
             $username = filter_var($data->USERNAME_POST, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
             $password = filter_var($data->PASSWORD_POST, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
 
-            if ($TOKEN === 'AGMA-06-01-2024-A$ELC0') {
+            // SECURITY UPDATE: Username and password now establish the user's own expiring session.
                 $verify = $this->db->where(
                     array(
                         'username' => $username,
@@ -40,11 +42,21 @@ class Userauth extends CI_Controller{
                 
                 if ($verify->num_rows() != 0) {
                     $rw = $verify->row();
+                    $access_token = $this->api_auth->create_token($rw); // SECURITY UPDATE: Token is signed by the API server.
+
+                    if (!$access_token) {
+                        $this->output->set_status_header(500);
+                        echo json_encode(array('message' => 'Authentication is not configured.', 'status' => 'error'));
+                        return;
+                    }
+
                     $response = array(
                         'message' => 'Login Successful',
                         'status' => 'success',
                         'areacode' => $rw->area,
-                        'user_type' => $rw->type // Assuming your table has a `user_type` column
+                        'user_type' => $rw->type, // Assuming your table has a `user_type` column
+                        'access_token' => $access_token, // SECURITY UPDATE: Mobile sends this in Authorization headers.
+                        'expires_in' => 28800 // SECURITY UPDATE: Eight-hour login lifetime in seconds.
                     );
                 } else {
                     $response = array(
@@ -52,9 +64,7 @@ class Userauth extends CI_Controller{
                         'status' => 'error'
                     );
                 }
-            }else {
-                $response = ['message' => 'Unauthorized token', 'status' => 'failed'];
-            }
+            // OLD CODE: Shared-token failure branch removed because login no longer trusts an app-wide secret.
 
             
         }else{
@@ -67,13 +77,13 @@ class Userauth extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN          = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: Account creation required the shared APK token.
+            // SECURITY UPDATE: Keep self-registration available before login; new users remain inactive until admin approval.
             $FULLNAME       = filter_var($data->FULLNAME, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
             $USERNAME       = filter_var($data->USERNAME, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
             $PASSWORD       = filter_var($data->PASSWORD, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
             $AREA           = filter_var($data->AREA, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
             
-            if ($TOKEN === 'AGMA-06-01-2024-A$ELC0') {
                 // ✅ Check if username already exists
                 $this->db->where('username', $USERNAME);
                 $query = $this->db->get('tbl_users');
@@ -98,9 +108,6 @@ class Userauth extends CI_Controller{
                         ? ['message' => 'Registration Successful!', 'status' => 'success']
                         : ['message' => 'Failed to register user', 'status' => 'failed'];
                 }
-            } else {
-                $response = ['message' => 'Unauthorized token', 'status' => 'failed'];
-            }
         } else {
             $response = ['message' => 'Invalid parameters', 'status' => 'failed'];
         }
@@ -112,11 +119,14 @@ class Userauth extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN          = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: $TOKEN came from the mobile request body.
+            // SECURITY UPDATE: Account activation is restricted to the authenticated admin.
+            if (!$this->api_auth->require_user('admin')) {
+                return;
+            }
             $USER_ID       = filter_var($data->USER_ID, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
             $ACTIVE       = filter_var($data->ACTIVE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
             
-            if ($TOKEN === 'AGMA-06-01-2024-A$ELC0') {
                 // ✅ Check if username already exists
                 $this->db->where('userid', $USER_ID);
                 $query = $this->db->get('tbl_users');
@@ -150,9 +160,6 @@ class Userauth extends CI_Controller{
                         'status' => 'failed'
                     ];
                 }
-            } else {
-                $response = ['message' => 'Unauthorized token', 'status' => 'failed'];
-            }
         } else {
             $response = ['message' => 'Invalid parameters', 'status' => 'failed'];
         }
@@ -164,9 +171,11 @@ class Userauth extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: $TOKEN was a shared secret stored inside the Android app.
+            if (!$this->api_auth->require_user('admin')) { // SECURITY UPDATE: User management requires an admin token.
+                return;
+            }
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
                 $info = array();
 
                 $num = 1;
@@ -187,7 +196,6 @@ class Userauth extends CI_Controller{
                     $num++;
                 }
                 $response = $info;
-            }
         } else {
             $response = array('message' => 'Invalid Parameters');
         }
@@ -198,9 +206,11 @@ class Userauth extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: $TOKEN was a shared secret stored inside the Android app.
+            if (!$this->api_auth->require_user('admin')) { // SECURITY UPDATE: Approval list is admin-only.
+                return;
+            }
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
                 $info = array();
 
                 $num = 1;
@@ -218,7 +228,6 @@ class Userauth extends CI_Controller{
                     $num++;
                 }
                 $response = $info;
-            }
         } else {
             $response = array('message' => 'Invalid Parameters');
         }

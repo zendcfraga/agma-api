@@ -13,6 +13,7 @@ class Api extends CI_Controller{
 
         $this->load->model('Header'); //load is a property, to call Header class from model
         $this->Header->ApiHeader(); //to call ApiHeader function from Header
+        $this->load->library('Api_auth'); // SECURITY UPDATE: Mobile endpoints now validate the logged-in user's Bearer token.
         
         // Load helper for global variables
         $this->load->helper('global_vars');
@@ -31,6 +32,12 @@ class Api extends CI_Controller{
     }
     
     public function cut_off(){
+        if ($_SERVER['REQUEST_METHOD'] !== 'GET') { // SECURITY UPDATE: Cutoff status is public read-only data.
+            http_response_code(405);
+            echo json_encode(array('message' => 'Method not allowed', 'status' => 'error'));
+            return;
+        }
+
         if ($this->now < $this->cutoff) {
             $response = array('message' => 'Registration still open.', 'status' => 'ok');
         } else {
@@ -40,6 +47,64 @@ class Api extends CI_Controller{
             );
         }
         echo json_encode($response, JSON_PRETTY_PRINT);
+    }
+
+    // SECURITY UPDATE: Create a short-lived, one-use permission after the visitor agrees to the privacy statement.
+    // This replaces the old browser-only consent check, which users could skip by typing /registration-page directly.
+    public function registration_intent()
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') { // Creating an intent changes data, so GET is not allowed.
+            http_response_code(405);
+            echo json_encode(array('message' => 'Method not allowed', 'status' => 'error'));
+            return;
+        }
+
+        if ($this->now >= $this->cutoff) { // SECURITY UPDATE: Do not issue new consent permissions after cutoff.
+            http_response_code(403);
+            echo json_encode(array(
+                'message' => 'Registrations are now closed. ' . $this->cutoff_msg,
+                'status' => 'error'
+            ));
+            return;
+        }
+
+        $data = json_decode(file_get_contents('php://input'));
+
+        if (!$data || !isset($data->CONSENT_ACCEPTED) || $data->CONSENT_ACCEPTED !== true) {
+            http_response_code(422); // The visitor must explicitly send true after selecting I Agree.
+            echo json_encode(array(
+                'message' => 'You must agree to the Data Privacy Statement before continuing.',
+                'status' => 'error'
+            ));
+            return;
+        }
+
+        $raw_token = bin2hex(random_bytes(32)); // SECURITY UPDATE: A new unpredictable value is created for this visitor only.
+        $token_hash = hash('sha256', $raw_token); // Store only the hash so the database does not contain usable tokens.
+        $expires_at = clone $this->now;
+        $expires_at->modify('+15 minutes'); // Keep the permission short-lived to reduce reuse or theft.
+
+        $saved = $this->db->insert('tbl_registration_intents', array(
+            'token_hash' => $token_hash,
+            'privacy_version' => '2026-09-02', // Records which privacy statement version was accepted.
+            'consented_at' => $this->now->format('Y-m-d H:i:s'),
+            'expires_at' => $expires_at->format('Y-m-d H:i:s'),
+            'used_at' => NULL,
+            'created_ip' => $this->input->ip_address()
+        ));
+
+        if (!$saved) {
+            http_response_code(500);
+            echo json_encode(array('message' => 'Unable to start registration.', 'status' => 'error'));
+            return;
+        }
+
+        http_response_code(201);
+        echo json_encode(array(
+            'status' => 'success',
+            'registration_intent' => $raw_token, // Only the browser receives the one-use original token.
+            'expires_in' => 900
+        ));
     }
     
     public function validate_registration_mobile(){
@@ -54,8 +119,8 @@ class Api extends CI_Controller{
             $data = json_decode(file_get_contents('php://input')); 
             if($data){
                     
-                    $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-                if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            // OLD CODE: TOKEN was read from the request body; Api_auth now verifies the Bearer header.
+                if ($this->api_auth->require_user(null, false)) { // SECURITY UPDATE: Replace the shared APK token with a user token.
                     $MEMBER_UNQID = filter_var($data->ACCOUNTNO, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
     
                     //$validate_duplicate_reg = $this->db->where('db_member_unqid',$MEMBER_UNQID);
@@ -96,9 +161,9 @@ class Api extends CI_Controller{
         if ($now < $cutoff) {
             $data = json_decode(file_get_contents('php://input'));
             if ($data) {
-                $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: TOKEN was read from the request body; Api_auth now verifies the Bearer header.
     
-                if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+                if ($this->api_auth->require_user(null, false)) { // SECURITY UPDATE: Require the logged-in mobile user.
                     $info = array();
     
                     $num = 1;
@@ -138,9 +203,8 @@ class Api extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            // OLD CODE: TOKEN was read from the request body; Api_auth now verifies the Bearer header.
+            if ($this->api_auth->require_user(null, false)) { // SECURITY UPDATE: Billing data remains login-protected.
                 $info = array();
 
                 $num = 1;
@@ -172,10 +236,10 @@ class Api extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: TOKEN was read from the request body; Api_auth now verifies the Bearer header.
             $AREA = filter_var($data->AREA, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            if ($this->api_auth->require_user(null, false)) { // SECURITY UPDATE: Require the logged-in mobile user.
                 $info = array();
 
                 $num = 1;
@@ -203,9 +267,8 @@ class Api extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            // OLD CODE: This guest venue list required a login token.
+            // SECURITY UPDATE: Attendance Per User needs this read-only venue list before login.
                 $info = array();
 
                 $rs = $this->db->order_by('db_venue_desc','asc');
@@ -218,7 +281,6 @@ class Api extends CI_Controller{
                     );
                 }
                 $response = $info;
-            }
         } else {
             $response = array('message' => 'Invalid Parameters');
         }
@@ -229,9 +291,8 @@ class Api extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            // OLD CODE: Area lookup required the shared APK token.
+            // SECURITY UPDATE: This read-only list stays available for the pre-login Create Account form.
                 $info = array();
 
                 $rs = $this->db->order_by('area','asc');
@@ -244,7 +305,6 @@ class Api extends CI_Controller{
                     );
                 }
                 $response = $info;
-            }
         } else {
             $response = array('message' => 'Invalid Parameters');
         }
@@ -261,11 +321,11 @@ class Api extends CI_Controller{
         if ($now < $cutoff) {
             $data = json_decode(file_get_contents('php://input'));
             if ($data) {
-                $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: TOKEN was read from the request body; Api_auth now verifies the Bearer header.
                 $SEARCH_VALUE = filter_var($data->SEARCH_VALUE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                 $SEARCH_CONDITION = filter_var($data->SEARCH_CONDITION, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
     
-                if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+                if ($this->api_auth->require_user(null, false)) { // SECURITY UPDATE: Require the logged-in mobile user.
                     $info = array();
     
                     $num = 1;
@@ -339,10 +399,10 @@ class Api extends CI_Controller{
         if ($now < $cutoff) {
             $data = json_decode(file_get_contents('php://input'));
             if ($data) {
-                $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: TOKEN was read from the request body; Api_auth now verifies the Bearer header.
                 $SEARCH_VALUE = filter_var($data->SEARCH_VALUE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
     
-                if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+                if ($this->api_auth->require_user(null, false)) { // SECURITY UPDATE: Require the logged-in mobile user.
                     $info = array();
     
                     $num = 1;
@@ -401,10 +461,10 @@ class Api extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: TOKEN was read from the request body; Api_auth now verifies the Bearer header.
             $ID = filter_var($data->POST->id, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            if ($this->api_auth->require_user(null, false)) { // SECURITY UPDATE: Require the logged-in mobile user.
                 $info = array();
 
                 $num = 1;
@@ -441,10 +501,10 @@ class Api extends CI_Controller{
     {
             $data = json_decode(file_get_contents('php://input'));
             if ($data) {
-                $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: TOKEN was read from the request body; Api_auth now verifies the Bearer header.
                 $ID = filter_var($data->POST->id, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
         
-                if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+                if ($TOKEN == 'OLD_SHARED_APP_TOKEN') { // OLD COMMENTED CODE: Redacted because exposed tokens must not stay in source.
                     $rs = $this->db->where('db_unq_id', $ID)
                                    ->get('tbl_member', 3);
         
@@ -561,11 +621,11 @@ class Api extends CI_Controller{
     {
         $data = json_decode(file_get_contents('php://input'));
         if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            // OLD CODE: TOKEN was read from the request body; Api_auth now verifies the Bearer header.
             //$ID = filter_var($data->POST->id, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
             $ID = filter_var($data->ID, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+            if ($this->api_auth->require_user(null, false)) { // SECURITY UPDATE: Require the logged-in mobile user.
                 $info = array();
 
                 $num = 1;
@@ -620,12 +680,17 @@ class Api extends CI_Controller{
 
     public function town_list()
     {
-        $data = json_decode(file_get_contents('php://input'));
-        if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+        // SECURITY UPDATE: This is public dropdown data; a token shipped in React cannot protect it.
+        // $data = json_decode(file_get_contents('php://input'));
+        // $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+        // if ($TOKEN == 'OLD_BROWSER_TOKEN_REMOVED') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'GET') { // Only allow the read-only HTTP method used by agma-web-app.
+            http_response_code(405);
+            echo json_encode(array('message' => 'Method not allowed', 'status' => 'error'));
+            return;
+        }
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
-                $info = array();
+                $info = array(); // SECURITY UPDATE: Always initialize a safe empty response.
 
                 $num = 1;
                 $rs = $this->db->order_by('db_town_name','asc');
@@ -640,21 +705,23 @@ class Api extends CI_Controller{
                     $num++;
                 }
                 $response = $info;
-            }
-        } else {
-            $response = array('message' => 'Invalid Parameters');
-        }
+        // } // OLD TOKEN CHECK CLOSING
         echo json_encode($response, JSON_PRETTY_PRINT);
     }
 
     public function civil_status_list()
     {
-        $data = json_decode(file_get_contents('php://input'));
-        if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+        // SECURITY UPDATE: This is public dropdown data; do not pretend a browser token is secret.
+        // $data = json_decode(file_get_contents('php://input'));
+        // $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+        // if ($TOKEN == 'OLD_BROWSER_TOKEN_REMOVED') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'GET') { // Only allow read-only requests.
+            http_response_code(405);
+            echo json_encode(array('message' => 'Method not allowed', 'status' => 'error'));
+            return;
+        }
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
-                $info = array();
+                $info = array(); // SECURITY UPDATE: Always initialize a safe empty response.
 
                 $num = 1;
                 $rs = $this->db->order_by('db_civil_code','asc');
@@ -663,28 +730,31 @@ class Api extends CI_Controller{
                 foreach ($rs->result() as $rw) {
                     $info[] = array(
                         'data_num' => $num,
-                        'data_civil_code ' => $rw->db_civil_code  ,
+                        'data_civil_code' => $rw->db_civil_code, // SECURITY UPDATE: Removed the accidental space in the JSON key.
                         'data_civil_desc' => $rw->db_civil_desc
                     );
                     $num++;
                 }
                 $response = $info;
-            }
-        } else {
-            $response = array('message' => 'Invalid Parameters');
-        }
+        // } // OLD TOKEN CHECK CLOSING
         echo json_encode($response, JSON_PRETTY_PRINT);
     }
 
     public function brgy_list()
     {
-        $data = json_decode(file_get_contents('php://input'));
-        if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-            $TOWN_CODE = filter_var($data->TOWN_CODE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-            $REQUEST = filter_var($data->REQUEST, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') { // SECURITY UPDATE: This lookup expects JSON input.
+            http_response_code(405);
+            echo json_encode(array('message' => 'Method not allowed', 'status' => 'error'));
+            return;
+        }
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+        $data = json_decode(file_get_contents('php://input'));
+        if ($data && isset($data->TOWN_CODE)) { // SECURITY UPDATE: Validate the required property before reading it.
+            // $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW); // OLD: Browser token was public.
+            $TOWN_CODE = filter_var($data->TOWN_CODE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+            $REQUEST = isset($data->REQUEST) ? filter_var($data->REQUEST, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW) : 'web'; // SECURITY UPDATE: Safe default for web.
+
+            // if ($TOKEN == 'OLD_BROWSER_TOKEN_REMOVED') { // OLD: Never authenticate a public browser with a shared secret.
                 $info = array();
 
                 if ($REQUEST=="mobile"){
@@ -719,8 +789,9 @@ class Api extends CI_Controller{
                     $num++;
                 }
                 $response = $info;
-            }
+            // } // OLD TOKEN CHECK CLOSING
         } else {
+            http_response_code(422); // SECURITY UPDATE: Tell the client that required input is missing.
             $response = array('message' => 'Invalid Parameters');
         }
         echo json_encode($response, JSON_PRETTY_PRINT);
@@ -728,11 +799,48 @@ class Api extends CI_Controller{
     
     public function zoom_details()
     {
-         $data = json_decode(file_get_contents('php://input'));
-        if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+        // OLD CODE: GET returned Zoom details to anyone who knew the public URL.
+        // if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') { // SECURITY UPDATE: Receipt is sent in a JSON POST body.
+            http_response_code(405);
+            echo json_encode(array('message' => 'Method not allowed', 'status' => 'error'));
+            return;
+        }
+
+        $data = json_decode(file_get_contents('php://input'));
+
+        if (!$data || !isset($data->REGISTRATION_RECEIPT) || !is_string($data->REGISTRATION_RECEIPT) || trim($data->REGISTRATION_RECEIPT) === '') {
+            http_response_code(403);
+            echo json_encode(array('message' => 'Successful registration is required.', 'status' => 'error'));
+            return;
+        }
+
+        $now = get_now();
+        $receipt_hash = hash('sha256', trim($data->REGISTRATION_RECEIPT)); // Compare the receipt without storing its usable value.
+
+        // SECURITY UPDATE: Claim the receipt first so two requests cannot both see the Zoom details.
+        $this->db->trans_begin();
+
+        $this->db
+            ->where('token_hash', $receipt_hash)
+            ->where('used_at IS NOT NULL', NULL, FALSE)
+            ->where('confirmation_viewed_at IS NULL', NULL, FALSE)
+            ->where('expires_at >=', $now->format('Y-m-d H:i:s'))
+            ->update('tbl_registration_intents', array(
+                'confirmation_viewed_at' => $now->format('Y-m-d H:i:s')
+            ));
+
+        if ($this->db->affected_rows() !== 1) {
+            $this->db->trans_rollback();
+            http_response_code(403);
+            echo json_encode(array(
+                'message' => 'Zoom details were already viewed or the receipt has expired.',
+                'status' => 'error'
+            ));
+            return;
+        }
+
                 $info = array();
 
                //$rs = $this->db->order_by('db_civil_code','asc');
@@ -746,20 +854,29 @@ class Api extends CI_Controller{
                     );
                 }
                 $response = $info;
-            }
-        } else {
-            $response = array('message' => 'Invalid Parameters');
+
+        if ($this->db->trans_status() === FALSE) {
+            $this->db->trans_rollback();
+            http_response_code(500);
+            echo json_encode(array('message' => 'Unable to load meeting details.', 'status' => 'error'));
+            return;
         }
+
+        $this->db->trans_commit(); // SECURITY UPDATE: Receipt becomes permanently viewed only when details were loaded.
         echo json_encode($response, JSON_PRETTY_PRINT);
     }
     
     public function getInfo()
     {
-        $data = json_decode(file_get_contents('php://input'));
-        if ($data) {
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+        // SECURITY UPDATE: Event heading information is public and does not need a browser token.
+        // $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW); // OLD browser token.
+        // if ($TOKEN == 'OLD_BROWSER_TOKEN_REMOVED') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'GET') { // Only allow read-only requests.
+            http_response_code(405);
+            echo json_encode(array('message' => 'Method not allowed', 'status' => 'error'));
+            return;
+        }
 
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') {
                 $info = array();
                 
                 //$this->db->order_by('id', 'DESC');
@@ -774,10 +891,7 @@ class Api extends CI_Controller{
                     );
                 }
                 $response = $info;
-            }
-        } else {
-            $response = array('message' => 'Invalid Parameters');
-        }
+        // } // OLD TOKEN CHECK CLOSING
         echo json_encode($response, JSON_PRETTY_PRINT);
     }
 
@@ -785,8 +899,8 @@ class Api extends CI_Controller{
     /*public function get_member_no_tester(){
         $data = json_decode(file_get_contents('php://input')); 
        if($data){
-            $TOKEN = filter_var($data->TOKEN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
-            if ($TOKEN == 'AGMA-06-01-2024-A$ELC0') 
+            // OLD CODE: TOKEN was read from the request body; Api_auth now verifies the Bearer header.
+            if ($TOKEN == 'OLD_SHARED_APP_TOKEN') // OLD COMMENTED CODE: Redacted because exposed tokens must not stay in source.
             {
                     $TOWN = filter_var($data->TOWN, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                     $LASTNAME = filter_var($data->LASTNAME, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);

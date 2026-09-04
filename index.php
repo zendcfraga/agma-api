@@ -53,7 +53,11 @@
  *
  * NOTE: If you change these, also change the error_reporting() code below
  */
+	// OLD CODE: Development mode prints PHP 8.2 deprecation notices into API JSON responses.
 	define('ENVIRONMENT', isset($_SERVER['CI_ENV']) ? $_SERVER['CI_ENV'] : 'development');
+
+	// SECURITY/API UPDATE: Never expose PHP warnings, paths, or stack traces in JSON responses.
+	//define('ENVIRONMENT', isset($_SERVER['CI_ENV']) ? $_SERVER['CI_ENV'] : 'production');
 
 /*
  *---------------------------------------------------------------

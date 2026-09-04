@@ -75,7 +75,7 @@ $query_builder = TRUE;
 
 $db['default'] = array(
 	'dsn'	=> '',
-	'hostname' => 'localhost',
+	'hostname' => 'srv616.hstgr.io',
 	'username' => 'u561042189_agma',
 	'password' => 'r|6^2KqkA4N',
 	'database' => 'u561042189_db_agma',
