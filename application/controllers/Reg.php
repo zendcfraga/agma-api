@@ -54,6 +54,9 @@ class Reg extends CI_Controller{
                 $BRGY = filter_var($data->BRGY, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                 $USERNAME = filter_var($data->USERNAME, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                 $SOURCE = filter_var($data->SOURCE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+                $RECEIVED_CASH = filter_var($data->RECEIVED_CASH, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+                $RECEIVED_SHIRT = filter_var($data->RECEIVED_SHIRT, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+                $RECEIVED_RICE = filter_var($data->RECEIVED_RICE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
 
                 $this->db->where('db_town_name',$TOWN);
                 $town_code = $this->db->get('tbl_town');
@@ -95,6 +98,9 @@ class Reg extends CI_Controller{
                     'db_registration_mode' => $REG_MODE, //or online or onsite
                     'username' => $USERNAME,
                     'mode' =>$SOURCE,
+                    'received_cash' => $RECEIVED_CASH,
+                    'received_shirt' => $RECEIVED_SHIRT,
+                    'received_rice' => $RECEIVED_RICE,
                     'db_registration_date' => $now
                     );
                     
@@ -141,6 +147,9 @@ class Reg extends CI_Controller{
                 $PUROK = filter_var($data->PUROK, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                 $SPOUSE_REG = filter_var($data->SPOUSE_REG, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                 $USERNAME = filter_var($data->USERNAME, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+                $RECEIVED_CASH = filter_var($data->RECEIVED_CASH, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+                $RECEIVED_SHIRT = filter_var($data->RECEIVED_SHIRT, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
+                $RECEIVED_RICE = filter_var($data->RECEIVED_RICE, FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_LOW);
                 
 
                 $this->db->where('db_town_name',$TOWN);
@@ -214,6 +223,9 @@ class Reg extends CI_Controller{
                     'db_registration_mode' => $REG_MODE, //or online
                     'db_spouse_member' => $SPOUSE_REG,
                     'username' => $USERNAME,
+                    'received_cash' => $RECEIVED_CASH,
+                    'received_shirt' => $RECEIVED_SHIRT,
+                    'received_rice' => $RECEIVED_RICE,
                     'mode' => 'search',
                     'db_registration_date' => $now
                     );
@@ -727,4 +739,104 @@ class Reg extends CI_Controller{
         }
         echo json_encode($response, JSON_PRETTY_PRINT);
     }
+
+    //raffle purposes, will possibly remove this function in the future, but for now, it is still needed. will improve the e-raffle
+    public function download_attendees()
+    {
+        $this->output->set_content_type('application/json');
+
+        //$this->db->where('active', true);
+        //$rs = $this->db->get('tbl_attendees');
+
+        $this->db->select('tbl_attendees.*, tbl_town.db_town_name AS town, tbl_brgys.db_brgy_name AS brgy');
+        $this->db->from('tbl_attendees');
+        $this->db->join(
+            'tbl_town',
+            'tbl_attendees.db_town = tbl_town.town_code',
+            'left'
+        );
+        $this->db->join(
+            'tbl_brgys',
+            'tbl_attendees.db_brgy = tbl_brgys.db_brgy_code',
+            'left'
+        );
+        $this->db->where('tbl_attendees.active', true);
+        $this->db->where('tbl_attendees.synced_at IS NULL', null, false);
+        $this->db->where('tbl_attendees.raffle_eligible', true);
+
+        $rs = $this->db->get();
+
+        $info = array();
+
+        foreach ($rs->result() as $rw) {
+            $info[] = array(
+                'cloud_id'          => $rw->db_id,
+                'account_number'    => $rw->db_account_no,
+                'first_name'        => $rw->db_first,
+                'last_name'         => $rw->db_last,
+                'municipality'      => $rw->town,
+                'barangay'          => $rw->brgy,
+                'purok'             => $rw->db_purok,
+                'is_active'         => $rw->active,
+                'registration_mode' => $rw->db_registration_mode,
+                'area'              => $rw->db_area,
+                'venue'             => $rw->db_venue,
+                'is_member'         => ($rw->db_member_no != '') ? '1' : '0'
+            );
+        }
+
+        return $this->output->set_output(
+            json_encode($info)
+        );
+    }
+
+    public function mark_attendees_synced()
+    {
+        $this->output->set_content_type('application/json');
+
+        $data = json_decode($this->input->raw_input_stream, true);
+
+        if (!isset($data['cloud_ids']) || !is_array($data['cloud_ids'])) {
+            return $this->output
+                ->set_status_header(400)
+                ->set_output(json_encode(array(
+                    'message' => 'cloud_ids must be an array'
+                )));
+        }
+
+        $cloud_ids = array_values(array_unique(array_filter(
+            array_map('intval', $data['cloud_ids']),
+            function ($id) {
+                return $id > 0;
+            }
+        )));
+
+        if (empty($cloud_ids)) {
+            return $this->output
+                ->set_status_header(400)
+                ->set_output(json_encode(array(
+                    'message' => 'No valid cloud IDs were supplied'
+                )));
+        }
+
+        $this->db->where_in('db_id', $cloud_ids);
+        $this->db->where('synced_at IS NULL', null, false);
+        $updated = $this->db->update('tbl_attendees', array(
+            'synced_at' => date('Y-m-d H:i:s')
+        ));
+
+        if (!$updated) {
+            return $this->output
+                ->set_status_header(500)
+                ->set_output(json_encode(array(
+                    'message' => 'Unable to update synced_at'
+                )));
+        }
+
+        return $this->output->set_output(json_encode(array(
+            'message' => 'Attendees marked as synced',
+            'updated' => $this->db->affected_rows()
+        )));
+    }
+
 }

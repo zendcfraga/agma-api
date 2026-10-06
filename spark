@@ -1,0 +1,52 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+if (PHP_SAPI !== 'cli') {
+    fwrite(STDERR, "The spark command can only be run from the command line.\n");
+    exit(1);
+}
+
+$command = $argv[1] ?? null;
+if ($command !== 'serve') {
+    fwrite(STDERR, "Usage: php spark serve [--host HOST] [--port PORT]\n");
+    exit(1);
+}
+
+$host = 'localhost';
+$port = 8080;
+
+for ($i = 2, $count = count($argv); $i < $count; $i++) {
+    $argument = $argv[$i];
+    if (preg_match('/^--host=(.+)$/', $argument, $matches)) {
+        $host = $matches[1];
+    } elseif (preg_match('/^--port=(.+)$/', $argument, $matches)) {
+        $port = (int) $matches[1];
+    } elseif ($argument === '--host' && isset($argv[$i + 1])) {
+        $host = $argv[++$i];
+    } elseif ($argument === '--port' && isset($argv[$i + 1])) {
+        $port = (int) $argv[++$i];
+    } else {
+        fwrite(STDERR, "Unknown option: {$argument}\n");
+        exit(1);
+    }
+}
+
+if ($host === '' || $port < 1 || $port > 65535) {
+    fwrite(STDERR, "Invalid host or port.\n");
+    exit(1);
+}
+
+$root = __DIR__;
+$address = $host . ':' . $port;
+fwrite(STDOUT, "CodeIgniter development server started on http://{$address}\n");
+fwrite(STDOUT, "Press Ctrl-C to stop.\n\n");
+
+$serverCommand = escapeshellarg(PHP_BINARY)
+    . ' -S ' . escapeshellarg($address)
+    . ' -t ' . escapeshellarg($root)
+    . ' ' . escapeshellarg($root . DIRECTORY_SEPARATOR . 'spark-router.php');
+
+passthru($serverCommand, $exitCode);
+exit($exitCode);

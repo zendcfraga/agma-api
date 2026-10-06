@@ -895,6 +895,58 @@ class Api extends CI_Controller{
         echo json_encode($response, JSON_PRETTY_PRINT);
     }
 
+
+    //raffle purposes, will possibly remove this function in the future, but for now, it is still needed. will improve the e-raffle
+    public function mark_raffle_eligibility() //good result, when tested in postman
+    {
+        $this->output->set_content_type('application/json');
+
+        $data = json_decode($this->input->raw_input_stream, true);
+
+        if (!isset($data['cloud_ids']) || !is_array($data['cloud_ids'])) {
+            return $this->output
+                ->set_status_header(400)
+                ->set_output(json_encode(array(
+                    'message' => 'cloud_ids must be an array'
+                )));
+        }
+
+        $cloud_ids = array_values(array_unique(array_filter(
+            array_map('intval', $data['cloud_ids']),
+            function ($id) {
+                return $id > 0;
+            }
+        )));
+
+        if (empty($cloud_ids)) {
+            return $this->output
+                ->set_status_header(400)
+                ->set_output(json_encode(array(
+                    'message' => 'No valid cloud IDs were supplied'
+                )));
+        }
+
+        $this->db->where_in('db_id', $cloud_ids);
+        $this->db->where('raffle_eligible = 1', null, false);
+        $updated = $this->db->update('tbl_attendees', array(
+            'raffle_eligible' => false
+        ));
+
+        if (!$updated) {
+            return $this->output
+                ->set_status_header(500)
+                ->set_output(json_encode(array(
+                    'message' => 'Unable to update raffle_eligible'
+                )));
+        }
+
+        return $this->output->set_output(json_encode(array(
+            'message' => 'Attendees marked as not eligible for raffle.',
+            'updated' => $this->db->affected_rows()
+        )));
+    }
+
+
 //TESTER----------------------------------------------------------------------------------------------------------------------------------------------------------------
     /*public function get_member_no_tester(){
         $data = json_decode(file_get_contents('php://input')); 
